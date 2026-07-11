@@ -46,7 +46,7 @@
   }
   #enter.ready{opacity:1; pointer-events:auto;}
 
-  #stage{position:fixed; inset:0; display:none; background:#000;}
+  #stage{position:fixed; inset:0; display:none; background:#000; touch-action:none;}
   #stage video{display:none;}
   canvas{display:block; width:100%; height:100%;}
 
@@ -54,7 +54,9 @@
     position:fixed; top:0; left:0; right:0; padding:14px 16px;
     display:flex; justify-content:flex-end; align-items:center;
     z-index:5; pointer-events:none;
+    opacity:0; transition:opacity .3s;
   }
+  #hud.show{opacity:1;}
   #hud button{pointer-events:auto; background:rgba(0,0,0,.5); border:1px solid rgba(255,255,255,.25);
     color:#fff; border-radius:8px; padding:8px 12px; font-size:12px;}
 
@@ -78,6 +80,14 @@
 
   #err{position:fixed; bottom:20px; left:16px; right:16px; background:#2a1414; border:1px solid #6b2c2c;
     color:#ffb4b4; padding:10px 12px; border-radius:8px; font-size:12px; display:none; z-index:6;}
+
+  #skipFlash{
+    position:fixed; top:50%; transform:translate(-50%,-50%);
+    background:rgba(0,0,0,.55); color:#fff; padding:14px 22px; border-radius:50px;
+    font-size:20px; font-weight:600; z-index:7; opacity:0; transition:opacity .25s;
+    pointer-events:none; white-space:nowrap;
+  }
+  #skipFlash.show{opacity:1;}
 </style>
 </head>
 <body>
@@ -88,7 +98,9 @@
     <p>VR180形式(左右分割・半球)の動画を選んで、ジャイロで見渡せます。<br>
     再生中に頭を素早く左右に振るとメニューが出ます。<br>
     ボタンやバーをしばらく見つめる(注視)と選択されます。<br>
-    正面がズレたら、メニュー内の⟲アイコンを見つめてください。3・2・1のカウントダウン後に再設定されます。</p>
+    正面がズレたら、メニュー内の⟲アイコンを見つめてください。3・2・1のカウントダウン後に再設定されます。<br>
+    壁が傾いて見えるときは、画面を<strong>指で上下にドラッグ</strong>すると微調整できます。<br>
+    画面の左右どちらかを<strong>すばやく2回タップ</strong>すると、10秒戻る/進むができます。</p>
   </div>
 
   <label class="file-btn">
@@ -109,6 +121,7 @@
   <div id="hint">頭を素早く左右に振るとメニューが出ます</div>
   <div class="reticle" id="reticleL"></div>
   <div class="reticle" id="reticleR"></div>
+  <div id="skipFlash"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -120,12 +133,21 @@
   const filenameEl = document.getElementById('filename');
   const enterBtn = document.getElementById('enter');
   const exitBtn = document.getElementById('exitBtn');
+  const hudEl = document.getElementById('hud');
   const errEl = document.getElementById('err');
   const video = document.getElementById('video');
   const hintEl = document.getElementById('hint');
   const reticleL = document.getElementById('reticleL');
   const reticleR = document.getElementById('reticleR');
+  const skipFlashEl = document.getElementById('skipFlash');
   const HINT_DEFAULT = hintEl.textContent;
+
+  let hudTimer = null;
+  function flashHud(){
+    hudEl.classList.add('show');
+    clearTimeout(hudTimer);
+    hudTimer = setTimeout(()=>hudEl.classList.remove('show'), 2500);
+  }
 
   function showHint(msg, duration){
     hintEl.textContent = msg;
@@ -135,6 +157,58 @@
       hintEl.classList.remove('show');
       hintEl.textContent = HINT_DEFAULT;
     }, duration || 1500);
+  }
+
+  // ---- タッチドラッグで縦方向(上下)を手動補正するトリム機能 ----
+  // 壁が垂直に見えないなど、ジャイロの基準ズレを指で微調整するためのもの。
+  // 視点操作(ジャイロ)とは独立していて、タッチでしか変更されない。
+  let pitchOffset = 0;
+  let dragActive = false, dragStartX = 0, dragStartY = 0, dragStartTime = 0, dragStartPitchOffset = 0;
+
+  const TAP_MOVE_LIMIT = 12;   // これ以上動いたらドラッグ扱い(タップとみなさない)
+  const DOUBLE_TAP_MS = 320;   // この時間内の同じ側のタップをダブルタップとみなす
+  let lastTapTime = 0, lastTapSide = null;
+
+  stageEl.addEventListener('pointerdown', (e)=>{
+    flashHud();
+    dragActive = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragStartTime = performance.now();
+    dragStartPitchOffset = pitchOffset;
+  });
+  stageEl.addEventListener('pointermove', (e)=>{
+    if(!dragActive) return;
+    const dy = e.clientY - dragStartY;
+    pitchOffset = THREE.MathUtils.clamp(dragStartPitchOffset - dy*0.15, -45, 45);
+    showHint('縦方向の補正: ' + Math.round(pitchOffset) + '°', 900);
+  });
+  stageEl.addEventListener('pointerup', (e)=>{
+    dragActive = false;
+    const moved = Math.hypot(e.clientX-dragStartX, e.clientY-dragStartY);
+    const elapsed = performance.now() - dragStartTime;
+    if(moved > TAP_MOVE_LIMIT || elapsed > 500) return; // ドラッグとして扱ったものはタップ判定しない
+
+    const side = e.clientX < window.innerWidth/2 ? 'left' : 'right';
+    const now = performance.now();
+    if(side === lastTapSide && (now - lastTapTime) < DOUBLE_TAP_MS){
+      skipSeconds(side === 'left' ? -10 : 10, e.clientX);
+      lastTapTime = 0; lastTapSide = null; // 3連続タップでの誤爆を防ぐ
+    } else {
+      lastTapTime = now;
+      lastTapSide = side;
+    }
+  });
+  stageEl.addEventListener('pointercancel', ()=>{ dragActive = false; });
+
+  function skipSeconds(delta, x){
+    if(!video.duration) return;
+    video.currentTime = THREE.MathUtils.clamp(video.currentTime + delta, 0, video.duration);
+    skipFlashEl.style.left = x + 'px';
+    skipFlashEl.textContent = (delta<0 ? '◀◀ ' : '') + Math.abs(delta) + '秒' + (delta>0 ? ' ▶▶' : '');
+    skipFlashEl.classList.add('show');
+    clearTimeout(skipSeconds._t);
+    skipSeconds._t = setTimeout(()=>skipFlashEl.classList.remove('show'), 500);
   }
 
   let fileReady = false;
@@ -493,19 +567,16 @@
   let alpha=0, beta=0, gamma=0, orient=0;
   let yawOffset = 0; // センター再設定用のオフセット(度)
 
+  // センター再設定のカウントダウンは、常時動いているrequestAnimationFrameループ側で管理する
+  // (setIntervalだとメニューの開閉やタブの状態次第で止まってしまうことがあるため)
+  let recenterPending = false;
+  let recenterDeadline = 0;
+  let recenterLastShownSec = -1;
+
   function startRecenterCountdown(){
-    let remaining = Math.round(RECENTER_COUNTDOWN_MS/1000); // 3
-    showHint('正面に向けてください… ' + remaining, 1100);
-    const timer = setInterval(()=>{
-      remaining--;
-      if(remaining > 0){
-        showHint('正面に向けてください… ' + remaining, 1100);
-      } else {
-        clearInterval(timer);
-        yawOffset = alpha; // 3秒後、その時点で向いている方向を正面(0度)にする
-        showHint('正面を再設定しました', 1500);
-      }
-    }, 1000);
+    recenterPending = true;
+    recenterDeadline = performance.now() + RECENTER_COUNTDOWN_MS;
+    recenterLastShownSec = -1;
   }
 
   function setQuaternion(quaternion, alphaDeg, betaDeg, gammaDeg, orientDeg){
@@ -562,9 +633,26 @@
   function animate(){
     if(!running) return;
     requestAnimationFrame(animate);
-    setQuaternion(cameraGroup.quaternion, alpha - yawOffset, beta, gamma, orient);
+    setQuaternion(cameraGroup.quaternion, alpha - yawOffset, beta - pitchOffset, gamma, orient);
 
     const now = performance.now();
+
+    // センター再設定のカウントダウン(メニューの開閉状態に関係なく毎フレーム進める)
+    if(recenterPending){
+      const remainMs = recenterDeadline - now;
+      if(remainMs <= 0){
+        recenterPending = false;
+        yawOffset = alpha; // 3秒後、その時点で向いている方向を正面(0度)にする
+        showHint('正面を再設定しました', 1500);
+      } else {
+        const sec = Math.ceil(remainMs/1000);
+        if(sec !== recenterLastShownSec){
+          recenterLastShownSec = sec;
+          showHint('正面に向けてください… ' + sec, 1100);
+        }
+      }
+    }
+
     if(detectShake(now, cameraGroup.quaternion)){
       toggleMenu();
     }
@@ -648,6 +736,7 @@
 
   function stop(){
     running = false;
+    recenterPending = false;
     video.pause();
     window.removeEventListener('deviceorientation', onDeviceOrientation);
     window.removeEventListener('orientationchange', onOrientationChange);
