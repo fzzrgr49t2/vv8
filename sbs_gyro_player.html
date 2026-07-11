@@ -140,11 +140,22 @@
     errEl.style.display = 'block';
   }
 
+  // シーク中のプレビュー用に、見えない2本目の動画を用意(YouTube風のサムネイル表示に使う)
+  const previewVideo = document.createElement('video');
+  previewVideo.muted = true;
+  previewVideo.playsInline = true;
+  previewVideo.preload = 'auto';
+  previewVideo.style.cssText = 'position:fixed; top:-9999px; left:-9999px; width:2px; height:2px; opacity:0;';
+  document.body.appendChild(previewVideo);
+  let previewSeeking = false;
+  previewVideo.addEventListener('seeked', ()=>{ previewSeeking = false; });
+
   fileInput.addEventListener('change', (e)=>{
     const f = e.target.files[0];
     if(!f) return;
     const url = URL.createObjectURL(f);
     video.src = url;
+    previewVideo.src = url;
     filenameEl.textContent = f.name;
     fileReady = true;
     enterBtn.classList.add('ready');
@@ -152,16 +163,23 @@
 
   // ---------- three.js セットアップ ----------
   let renderer, scene, cameraGroup, cameraL, cameraR;
-  let texL, texR;
   let running = false;
 
-  // メニュー関連
-  const MENU_DIST = 2.2, MENU_W = 1.7, MENU_H = 0.95;
-  const CANVAS_W = 1024, CANVAS_H = 576;
+  // ---- メニューのレイアウト(ボタン・シークバーの位置とサイズをここで一元管理) ----
+  const CANVAS_W = 1400, CANVAS_H = 640;
+  const MENU_W = 2.2, MENU_H = MENU_W * (CANVAS_H/CANVAS_W);
   const DWELL_MS = 650;
-  const RECENTER_COUNTDOWN_MS = 3000; // 再設定を選択してから正面を決めるまでの待ち時間
+  const RECENTER_COUNTDOWN_MS = 3000;
+
+  const CLOSE_BTN    = {cx:1316, cy:70,  r:48};
+  const RECENTER_BTN = {cx:1180, cy:70,  r:48};
+  const PLAY_BTN     = {cx:170,  cy:CANVAS_H-110, r:90};
+  const SEEK_BAR     = {x:340,  y:CANVAS_H-150, w:760, h:80};
+  const PREVIEW_W = 260, PREVIEW_H = 146;
+
   let menuGroup, menuCanvas, menuCtx, menuTexture, hitPlane;
   let hoverRegion = null, hoverStart = 0, hoverFrac = 0;
+  let lastPreviewTarget = -1, lastPreviewReqAt = 0;
 
   function buildScene(){
     scene = new THREE.Scene();
@@ -180,12 +198,12 @@
     const geoHalf = new THREE.SphereGeometry(500, 60, 40, Math.PI/2, Math.PI, 0, Math.PI);
     geoHalf.scale(-1,1,1);
 
-    texL = new THREE.VideoTexture(video);
+    const texL = new THREE.VideoTexture(video);
     texL.minFilter = THREE.LinearFilter;
     texL.format = THREE.RGBFormat;
     texL.repeat.set(0.5,1); texL.offset.set(0,0);
 
-    texR = new THREE.VideoTexture(video);
+    const texR = new THREE.VideoTexture(video);
     texR.minFilter = THREE.LinearFilter;
     texR.format = THREE.RGBFormat;
     texR.repeat.set(0.5,1); texR.offset.set(0.5,0);
@@ -233,10 +251,10 @@
 
   function openMenu(){
     const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(cameraGroup.quaternion);
-    fwd.y = 0; // 上下は水平に固定し、見やすい高さに出す
+    fwd.y = 0;
     if(fwd.lengthSq() < 0.0001) fwd.set(0,0,-1);
     fwd.normalize();
-    menuGroup.position.copy(fwd.multiplyScalar(MENU_DIST));
+    menuGroup.position.copy(fwd.multiplyScalar(2.6));
     menuGroup.lookAt(0,0,0);
     menuGroup.visible = true;
     hoverRegion = null;
@@ -256,19 +274,13 @@
   function regionAt(u, v){
     const px = u * CANVAS_W;
     const py = (1 - v) * CANVAS_H;
-    // 閉じるボタン
-    const cx=940, cy=64, cr=40;
-    if(Math.hypot(px-cx, py-cy) < cr) return {region:'close'};
-    // センター再設定ボタン
-    const rx=820, ry=64, rr=40;
-    if(Math.hypot(px-rx, py-ry) < rr) return {region:'recenter'};
-    // 再生/一時停止ボタン
-    const px2=150, py2=CANVAS_H/2, pr=76;
-    if(Math.hypot(px-px2, py-py2) < pr) return {region:'play'};
-    // シークバー
-    const bx=300, by=CANVAS_H/2-40, bw=680, bh=80;
-    if(px>=bx && px<=bx+bw && py>=by && py<=by+bh){
-      return {region:'seek', frac: Math.min(1,Math.max(0,(px-bx)/bw))};
+
+    if(Math.hypot(px-CLOSE_BTN.cx, py-CLOSE_BTN.cy) < CLOSE_BTN.r) return {region:'close'};
+    if(Math.hypot(px-RECENTER_BTN.cx, py-RECENTER_BTN.cy) < RECENTER_BTN.r) return {region:'recenter'};
+    if(Math.hypot(px-PLAY_BTN.cx, py-PLAY_BTN.cy) < PLAY_BTN.r) return {region:'play'};
+
+    if(px>=SEEK_BAR.x && px<=SEEK_BAR.x+SEEK_BAR.w && py>=SEEK_BAR.y-30 && py<=SEEK_BAR.y+SEEK_BAR.h+30){
+      return {region:'seek', frac: Math.min(1,Math.max(0,(px-SEEK_BAR.x)/SEEK_BAR.w))};
     }
     return null;
   }
@@ -278,7 +290,7 @@
     ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
 
     // 背景パネル
-    roundRect(ctx, 8,8,CANVAS_W-16,CANVAS_H-16,28);
+    roundRect(ctx, 8,8,CANVAS_W-16,CANVAS_H-16,32);
     ctx.fillStyle = 'rgba(10,10,14,0.82)';
     ctx.fill();
     ctx.lineWidth = 3;
@@ -287,46 +299,87 @@
 
     const dwellFrac = hoverRegion ? Math.min(1, (performance.now()-hoverStart) / DWELL_MS) : 0;
 
-    // 閉じるボタン
-    drawCircleButton(ctx, 940,64,40, hoverRegion==='close'?dwellFrac:0, '✕', 22);
+    drawCircleButton(ctx, CLOSE_BTN.cx, CLOSE_BTN.cy, CLOSE_BTN.r, hoverRegion==='close'?dwellFrac:0, '✕', 26);
+    drawCircleButton(ctx, RECENTER_BTN.cx, RECENTER_BTN.cy, RECENTER_BTN.r, hoverRegion==='recenter'?dwellFrac:0, '⟲', 32);
 
-    // センター再設定ボタン
-    drawCircleButton(ctx, 820,64,40, hoverRegion==='recenter'?dwellFrac:0, '⟲', 26);
-
-    // 再生/一時停止ボタン
     const paused = video.paused;
-    drawCircleButton(ctx, 150,CANVAS_H/2,76, hoverRegion==='play'?dwellFrac:0, paused?'▶':'❚❚', 46);
+    drawCircleButton(ctx, PLAY_BTN.cx, PLAY_BTN.cy, PLAY_BTN.r, hoverRegion==='play'?dwellFrac:0, paused?'▶':'❚❚', 54);
 
-    // シークバー
-    const bx=300, by=CANVAS_H/2-40, bw=680, bh=80;
-    roundRect(ctx, bx,by,bw,bh,16);
+    // シークバー(横長・太めにして細かい位置調整をしやすく)
+    roundRect(ctx, SEEK_BAR.x, SEEK_BAR.y, SEEK_BAR.w, SEEK_BAR.h, 18);
     ctx.fillStyle = 'rgba(255,255,255,0.12)';
     ctx.fill();
 
     const dur = video.duration || 0;
-    const cur = dur ? video.currentTime/dur : 0;
-    roundRect(ctx, bx,by,bw*cur,bh,16);
+    const curFrac = dur ? video.currentTime/dur : 0;
+    roundRect(ctx, SEEK_BAR.x, SEEK_BAR.y, SEEK_BAR.w*curFrac, SEEK_BAR.h, 18);
     ctx.fillStyle = 'rgba(95,179,163,0.9)';
     ctx.fill();
 
-    // 注視中のシーク位置プレビュー
-    if(hoverRegion === 'seek'){
-      const hx = bx + hoverFrac*bw;
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      ctx.fillRect(hx-2, by-10, 4, bh+20);
+    // 現在の再生位置ハンドル
+    ctx.beginPath();
+    ctx.arc(SEEK_BAR.x+SEEK_BAR.w*curFrac, SEEK_BAR.y+SEEK_BAR.h/2, 14, 0, Math.PI*2);
+    ctx.fillStyle = '#fff'; ctx.fill();
 
-      // 注視の滞留(ドウェル)を示すリング的なバー
+    if(hoverRegion === 'seek'){
+      const hx = SEEK_BAR.x + hoverFrac*SEEK_BAR.w;
+
+      // 注視位置のマーカー
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fillRect(hx-3, SEEK_BAR.y-14, 6, SEEK_BAR.h+28);
+
+      // 注視の滞留(ドウェル)を示すバー
       ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.fillRect(bx, by+bh+10, bw*dwellFrac, 6);
+      ctx.fillRect(SEEK_BAR.x, SEEK_BAR.y+SEEK_BAR.h+14, SEEK_BAR.w*dwellFrac, 6);
+
+      drawSeekPreview(ctx, hx, dur);
     }
 
     // 時間表示
     ctx.fillStyle = '#e9e9ee';
     ctx.font = '28px -apple-system, sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(fmtTime(video.currentTime)+' / '+fmtTime(dur), bx, by+bh+54);
+    ctx.fillText(fmtTime(video.currentTime)+' / '+fmtTime(dur), SEEK_BAR.x, SEEK_BAR.y+SEEK_BAR.h+58);
 
     menuTexture.needsUpdate = true;
+  }
+
+  // YouTube風の、シーク先を小さくプレビュー表示する機能
+  function drawSeekPreview(ctx, hx, dur){
+    const target = hoverFrac * dur;
+
+    // プレビュー動画のシークを間引く(毎フレーム呼ぶと重いため)
+    const now = performance.now();
+    if(dur && !previewSeeking && (now - lastPreviewReqAt > 150) && Math.abs(target - lastPreviewTarget) > 0.2){
+      previewSeeking = true;
+      lastPreviewReqAt = now;
+      lastPreviewTarget = target;
+      try{ previewVideo.currentTime = target; }catch(e){ previewSeeking = false; }
+    }
+
+    let px = hx - PREVIEW_W/2;
+    px = Math.min(Math.max(px, SEEK_BAR.x), SEEK_BAR.x + SEEK_BAR.w - PREVIEW_W);
+    const py = SEEK_BAR.y - PREVIEW_H - 34;
+
+    roundRect(ctx, px-6, py-6, PREVIEW_W+12, PREVIEW_H+12, 14);
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.stroke();
+
+    if(previewVideo.readyState >= 2 && previewVideo.videoWidth > 0){
+      const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
+      ctx.save();
+      roundRect(ctx, px, py, PREVIEW_W, PREVIEW_H, 8);
+      ctx.clip();
+      // SBS動画の左半分(左目用)だけを切り出して、通常の映像らしく見せる
+      ctx.drawImage(previewVideo, 0, 0, vw/2, vh, px, py, PREVIEW_W, PREVIEW_H);
+      ctx.restore();
+    }
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '24px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(fmtTime(target), px + PREVIEW_W/2, py + PREVIEW_H + 30);
   }
 
   function drawCircleButton(ctx, x,y,r, dwellFrac, label, fontSize){
@@ -527,8 +580,25 @@
     renderer.render(scene, cameraR);
   }
 
+  // ユーザーのタップ操作から間を置かずにフルスクリーンを要求する。
+  // await を挟んでから呼ぶと「ユーザー操作の有効期限」が切れて
+  // ブラウザに拒否されることがあるため、他の非同期処理より先に呼ぶ。
+  function requestFullscreenNow(){
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen ||
+                el.mozRequestFullScreen || el.msRequestFullscreen;
+    if(req){
+      try{
+        const p = req.call(el);
+        if(p && p.catch) p.catch(()=>{});
+      }catch(e){ /* 無視して続行 */ }
+    }
+  }
+
   async function start(){
     if(!fileReady){ showError('先に動画ファイルを選んでください'); return; }
+
+    requestFullscreenNow();
 
     try{
       if(typeof DeviceOrientationEvent !== 'undefined' &&
@@ -556,9 +626,8 @@
 
     try{ await video.play(); }catch(e){ showError('動画の再生に失敗しました: ' + e.message); }
 
-    try{
-      if(stageEl.requestFullscreen) await stageEl.requestFullscreen();
-    }catch(e){ /* フルスクリーン失敗は無視 */ }
+    // 念のためもう一度リクエスト(1回目が何らかの理由で通らなかった場合の保険)
+    if(!document.fullscreenElement) requestFullscreenNow();
 
     try{
       if(screen.orientation && screen.orientation.lock){
