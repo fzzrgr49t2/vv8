@@ -116,6 +116,7 @@
 <div id="stage">
   <video id="video" playsinline webkit-playsinline crossorigin="anonymous" loop></video>
   <div id="hud">
+    <button id="flipBtn" style="margin-right:8px;">上下反転</button>
     <button id="exitBtn">戻る</button>
   </div>
   <div id="hint">頭を素早く左右に振るとメニューが出ます</div>
@@ -133,7 +134,24 @@
   const filenameEl = document.getElementById('filename');
   const enterBtn = document.getElementById('enter');
   const exitBtn = document.getElementById('exitBtn');
+  const flipBtn = document.getElementById('flipBtn');
   const hudEl = document.getElementById('hud');
+
+  // 上下反転(星空が地面に映るなど、動画の上下が入れ替わっている場合の手動修正)
+  function applyFlip(){
+    if(!texL || !texR) return;
+    const rep = flipV ? -1 : 1;
+    const off = flipV ? 1 : 0;
+    texL.repeat.set(0.5, rep); texL.offset.set(0, off);
+    texR.repeat.set(0.5, rep); texR.offset.set(0.5, off);
+  }
+  flipBtn.addEventListener('click', ()=>{
+    flipV = !flipV;
+    applyFlip();
+    flashHud();
+    showHint(flipV ? '上下を反転しました' : '上下反転を解除しました', 1200);
+  });
+
   const errEl = document.getElementById('err');
   const video = document.getElementById('video');
   const hintEl = document.getElementById('hint');
@@ -241,6 +259,8 @@
 
   // ---------- three.js セットアップ ----------
   let renderer, scene, cameraGroup, cameraL, cameraR;
+  let texL, texR;
+  let flipV = false; // 上下反転の状態
   let running = false;
 
   // ---- メニューのレイアウト(ボタン・シークバーの位置とサイズをここで一元管理) ----
@@ -276,15 +296,15 @@
     const geoHalf = new THREE.SphereGeometry(500, 60, 40, Math.PI/2, Math.PI, 0, Math.PI);
     geoHalf.scale(-1,1,1);
 
-    const texL = new THREE.VideoTexture(video);
+    texL = new THREE.VideoTexture(video);
     texL.minFilter = THREE.LinearFilter;
     texL.format = THREE.RGBFormat;
-    texL.repeat.set(0.5,1); texL.offset.set(0,0);
 
-    const texR = new THREE.VideoTexture(video);
+    texR = new THREE.VideoTexture(video);
     texR.minFilter = THREE.LinearFilter;
     texR.format = THREE.RGBFormat;
-    texR.repeat.set(0.5,1); texR.offset.set(0.5,0);
+
+    applyFlip(); // 左右半分への割り当てと、上下反転の状態を反映
 
     const meshL = new THREE.Mesh(geoHalf, new THREE.MeshBasicMaterial({map: texL}));
     meshL.layers.set(1);
@@ -642,7 +662,12 @@
       const remainMs = recenterDeadline - now;
       if(remainMs <= 0){
         recenterPending = false;
-        yawOffset = alpha; // 3秒後、その時点で向いている方向を正面(0度)にする
+        // raw な alpha 値ではなく、実際に今描画されている方向を基準に正面を合わせる。
+        // (raw alphaを直接使うと、メニュー開閉時の頭の向きの違いによって
+        //  180度反対に設定されてしまう不具合があったため)
+        const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(cameraGroup.quaternion);
+        const currentYawDeg = THREE.MathUtils.radToDeg(Math.atan2(fwd.x, -fwd.z));
+        yawOffset += currentYawDeg;
         showHint('正面を再設定しました', 1500);
       } else {
         const sec = Math.ceil(remainMs/1000);
