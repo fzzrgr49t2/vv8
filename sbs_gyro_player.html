@@ -51,14 +51,15 @@
   canvas{display:block; width:100%; height:100%;}
 
   #hud{
-    position:fixed; top:0; left:0; right:0; padding:14px 16px;
-    display:flex; justify-content:flex-end; align-items:center;
+    position:fixed; top:0; left:0; right:0; padding:12px 14px;
+    display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center;
+    gap:6px; row-gap:6px;
     z-index:5; pointer-events:none;
     opacity:0; transition:opacity .3s;
   }
   #hud.show{opacity:1;}
   #hud button{pointer-events:auto; background:rgba(0,0,0,.5); border:1px solid rgba(255,255,255,.25);
-    color:#fff; border-radius:8px; padding:8px 12px; font-size:12px;}
+    color:#fff; border-radius:8px; padding:6px 10px; font-size:11px;}
 
   /* 画面中央(左目・右目それぞれ)に出す照準点。メニュー表示中のみ見せる */
   .reticle{
@@ -116,6 +117,8 @@
 <div id="stage">
   <video id="video" playsinline webkit-playsinline crossorigin="anonymous" loop></video>
   <div id="hud">
+    <button id="rollLeftBtn" style="margin-right:6px;">傾き↺</button>
+    <button id="rollRightBtn" style="margin-right:8px;">傾き↻</button>
     <button id="tiltDownBtn" style="margin-right:6px;">水平線▼</button>
     <button id="tiltUpBtn" style="margin-right:8px;">水平線▲</button>
     <button id="flipBtn" style="margin-right:8px;">上下反転</button>
@@ -139,6 +142,8 @@
   const flipBtn = document.getElementById('flipBtn');
   const tiltDownBtn = document.getElementById('tiltDownBtn');
   const tiltUpBtn = document.getElementById('tiltUpBtn');
+  const rollLeftBtn = document.getElementById('rollLeftBtn');
+  const rollRightBtn = document.getElementById('rollRightBtn');
   const hudEl = document.getElementById('hud');
 
   // 上下反転(星空が地面に映るなど、動画の上下が入れ替わっている場合の手動修正)
@@ -157,21 +162,26 @@
     showHint(flipV ? '上下を反転しました' : '上下反転を解除しました', 1200);
   });
 
-  // 水平線(縦方向の角度)をボタンで調整。タップで少しずつ、長押しで連続調整。
+  // 水平線(縦方向の角度・ピッチ)をボタンで調整
   function adjustPitch(delta){
     pitchOffset = THREE.MathUtils.clamp(pitchOffset + delta, -90, 90);
-    showHint('水平線の角度: ' + Math.round(pitchOffset) + '°', 900);
+    showHint('縦方向(ピッチ)の角度: ' + Math.round(pitchOffset) + '°', 900);
   }
-  function bindHoldButton(el, delta){
+  // 傾き(ロール)をボタンで調整。床が坂道のように斜めに見えるときはこちらを使う。
+  function adjustRoll(delta){
+    rollOffset = THREE.MathUtils.clamp(rollOffset + delta, -45, 45);
+    showHint('傾き(ロール)の角度: ' + Math.round(rollOffset) + '°', 900);
+  }
+  function bindHoldButton(el, fn, delta){
     let holdTimer = null, repeatTimer = null;
     const startHold = (e)=>{
       e.preventDefault();
       e.stopPropagation();
       flashHud();
-      adjustPitch(delta);
+      fn(delta);
       clearTimeout(holdTimer); clearInterval(repeatTimer);
       holdTimer = setTimeout(()=>{
-        repeatTimer = setInterval(()=>adjustPitch(delta), 110);
+        repeatTimer = setInterval(()=>fn(delta), 110);
       }, 400);
     };
     const endHold = ()=>{
@@ -182,8 +192,10 @@
     el.addEventListener('pointerleave', endHold);
     el.addEventListener('pointercancel', endHold);
   }
-  bindHoldButton(tiltDownBtn, -3);
-  bindHoldButton(tiltUpBtn, 3);
+  bindHoldButton(tiltDownBtn, adjustPitch, -3);
+  bindHoldButton(tiltUpBtn, adjustPitch, 3);
+  bindHoldButton(rollLeftBtn, adjustRoll, -3);
+  bindHoldButton(rollRightBtn, adjustRoll, 3);
 
   const errEl = document.getElementById('err');
   const video = document.getElementById('video');
@@ -214,6 +226,9 @@
   // 壁が垂直に見えないなど、ジャイロの基準ズレを指で微調整するためのもの。
   // 視点操作(ジャイロ)とは独立していて、タッチでしか変更されない。
   let pitchOffset = 0;
+  let rollOffset = 0; // 傾き(ロール)補正。床が坂道のように斜めに見える場合に使う
+  const rollAxis = new THREE.Vector3(0,0,1);
+  const rollQuat = new THREE.Quaternion();
   let dragActive = false, dragStartX = 0, dragStartY = 0, dragStartTime = 0, dragStartPitchOffset = 0;
 
   const TAP_MOVE_LIMIT = 12;   // これ以上動いたらドラッグ扱い(タップとみなさない)
@@ -301,9 +316,11 @@
   const MENU_W = 3.0, MENU_H = MENU_W * (CANVAS_H/CANVAS_W);
   const DWELL_MS = 650;
   const RECENTER_COUNTDOWN_MS = 3000;
+  // iPhone14(横幅約139.8mm、CSS上は約844px)を基準に、実測5mm相当になるよう算出した値
+  const CENTER_GAP_PX = 30;
 
   const CLOSE_BTN    = {cx:1916, cy:70,  r:48};
-  const RECENTER_BTN = {cx:1780, cy:70,  r:48};
+  const RECENTER_BTN = {cx:1780, cy:70,  r:58};
   const PLAY_BTN     = {cx:170,  cy:CANVAS_H-110, r:90};
   const SEEK_BAR     = {x:340,  y:CANVAS_H-150, w:1352, h:84};
   const PREVIEW_W = 260, PREVIEW_H = 146;
@@ -555,6 +572,9 @@
   }
 
   const raycaster = new THREE.Raycaster();
+  const GAZE_MISS_GRACE_MS = 220; // 視線が一瞬外れても、この時間内ならまだ選択中とみなす
+  let missSince = null;
+
   function updateGaze(){
     if(!menuGroup.visible) return;
     const origin = new THREE.Vector3(0,0,0);
@@ -569,12 +589,21 @@
 
     const now = performance.now();
     if(!hit){
-      hoverRegion = null;
+      if(hoverRegion){
+        // すぐに諦めず、少しの間は選択中の状態を維持する(自然な視線のブレを吸収するため)
+        if(missSince === null) missSince = now;
+        if(now - missSince > GAZE_MISS_GRACE_MS){
+          hoverRegion = null;
+          missSince = null;
+        }
+      }
     } else if(hit.region !== hoverRegion){
       hoverRegion = hit.region;
       hoverStart = now;
+      missSince = null;
       if(hit.frac !== undefined) hoverFrac = hit.frac;
     } else {
+      missSince = null;
       if(hit.frac !== undefined){
         if(Math.abs(hit.frac - hoverFrac) > 0.02){
           hoverFrac = hit.frac;
@@ -687,6 +716,11 @@
     if(!running) return;
     requestAnimationFrame(animate);
     setQuaternion(cameraGroup.quaternion, alpha - yawOffset, beta - pitchOffset, gamma, orient);
+    if(rollOffset !== 0){
+      // カメラの視線方向(ローカルZ軸)を軸に回転させることで、見ている方向は変えずに傾きだけを補正する
+      rollQuat.setFromAxisAngle(rollAxis, THREE.MathUtils.degToRad(rollOffset));
+      cameraGroup.quaternion.multiply(rollQuat);
+    }
 
     const now = performance.now();
 
@@ -721,12 +755,21 @@
     }
 
     const w = window.innerWidth, h = window.innerHeight;
+
+    // 中央のスペーサー(iPhone14の画面サイズから逆算し、実測で約5mm相当になるよう設定)
+    const halfW = (w - CENTER_GAP_PX) / 2;
+
+    renderer.setScissorTest(false);
+    renderer.setViewport(0,0,w,h);
+    renderer.setClearColor(0x000000, 1);
+    renderer.clear();
+
     renderer.setScissorTest(true);
-    renderer.setViewport(0,0,w/2,h);
-    renderer.setScissor(0,0,w/2,h);
+    renderer.setViewport(0,0,halfW,h);
+    renderer.setScissor(0,0,halfW,h);
     renderer.render(scene, cameraL);
-    renderer.setViewport(w/2,0,w/2,h);
-    renderer.setScissor(w/2,0,w/2,h);
+    renderer.setViewport(w-halfW,0,halfW,h);
+    renderer.setScissor(w-halfW,0,halfW,h);
     renderer.render(scene, cameraR);
   }
 
