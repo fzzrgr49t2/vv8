@@ -100,7 +100,7 @@
     再生中に頭を素早く左右に振るとメニューが出ます。<br>
     ボタンやバーをしばらく見つめる(注視)と選択されます。<br>
     正面がズレたら、メニュー内の⟲アイコンを見つめてください。3・2・1のカウントダウン後に再設定されます。<br>
-    壁が傾いて見えるときは、画面を<strong>指で上下にドラッグ</strong>すると微調整できます。<br>
+    床が坂道のように傾いて見えるときは、画面を<strong>指で上下にドラッグ</strong>すると映像の中心を平行移動できます(HUDの「中心を上へ/下へ」ボタンでも可)。<br>
     画面の左右どちらかを<strong>すばやく2回タップ</strong>すると、10秒戻る/進むができます。</p>
   </div>
 
@@ -119,8 +119,8 @@
   <div id="hud">
     <button id="rollLeftBtn" style="margin-right:6px;">傾き↺</button>
     <button id="rollRightBtn" style="margin-right:8px;">傾き↻</button>
-    <button id="tiltDownBtn" style="margin-right:6px;">水平線▼</button>
-    <button id="tiltUpBtn" style="margin-right:8px;">水平線▲</button>
+    <button id="tiltDownBtn" style="margin-right:6px;">中心を下へ</button>
+    <button id="tiltUpBtn" style="margin-right:8px;">中心を上へ</button>
     <button id="flipBtn" style="margin-right:8px;">上下反転</button>
     <button id="exitBtn">戻る</button>
   </div>
@@ -146,28 +146,30 @@
   const rollRightBtn = document.getElementById('rollRightBtn');
   const hudEl = document.getElementById('hud');
 
-  // 上下反転(星空が地面に映るなど、動画の上下が入れ替わっている場合の手動修正)
-  function applyFlip(){
+  // 動画テクスチャの割り当て(左右半分+上下反転+上下シフト)をまとめて反映する
+  function applyMapping(){
     if(!texL || !texR) return;
     const rep = flipV ? -1 : 1;
-    const off = flipV ? 1 : 0;
+    const off = (flipV ? 1 : 0) + rep * vShift;
     texL.repeat.set(0.5, rep); texL.offset.set(0, off);
     texR.repeat.set(0.5, rep); texR.offset.set(0.5, off);
   }
   flipBtn.addEventListener('pointerdown', (e)=>e.stopPropagation());
   flipBtn.addEventListener('click', ()=>{
     flipV = !flipV;
-    applyFlip();
+    applyMapping();
     flashHud();
     showHint(flipV ? '上下を反転しました' : '上下反転を解除しました', 1200);
   });
 
-  // 水平線(縦方向の角度・ピッチ)をボタンで調整
-  function adjustPitch(delta){
-    pitchOffset = THREE.MathUtils.clamp(pitchOffset + delta, -90, 90);
-    showHint('縦方向(ピッチ)の角度: ' + Math.round(pitchOffset) + '°', 900);
+  // 映像の中心を上下に「平行移動」させる(回転ではなく、動画テクスチャの位置そのものをずらす)
+  // 水平な床が坂道のように見えるのは、映像の中心がズレていることが原因のため。
+  function adjustVShift(delta){
+    vShift = THREE.MathUtils.clamp(vShift + delta, -0.3, 0.3);
+    applyMapping();
+    showHint('映像の中心を上下にシフト: ' + Math.round(vShift*100) + '%', 900);
   }
-  // 傾き(ロール)をボタンで調整。床が坂道のように斜めに見えるときはこちらを使う。
+  // 傾き(ロール)をボタンで調整。床が全体的に左右どちらかに傾いて見えるときはこちらを使う。
   function adjustRoll(delta){
     rollOffset = THREE.MathUtils.clamp(rollOffset + delta, -45, 45);
     showHint('傾き(ロール)の角度: ' + Math.round(rollOffset) + '°', 900);
@@ -192,8 +194,8 @@
     el.addEventListener('pointerleave', endHold);
     el.addEventListener('pointercancel', endHold);
   }
-  bindHoldButton(tiltDownBtn, adjustPitch, -3);
-  bindHoldButton(tiltUpBtn, adjustPitch, 3);
+  bindHoldButton(tiltDownBtn, adjustVShift, -0.01);
+  bindHoldButton(tiltUpBtn, adjustVShift, 0.01);
   bindHoldButton(rollLeftBtn, adjustRoll, -3);
   bindHoldButton(rollRightBtn, adjustRoll, 3);
 
@@ -222,14 +224,14 @@
     }, duration || 1500);
   }
 
-  // ---- タッチドラッグで縦方向(上下)を手動補正するトリム機能 ----
-  // 壁が垂直に見えないなど、ジャイロの基準ズレを指で微調整するためのもの。
-  // 視点操作(ジャイロ)とは独立していて、タッチでしか変更されない。
-  let pitchOffset = 0;
-  let rollOffset = 0; // 傾き(ロール)補正。床が坂道のように斜めに見える場合に使う
+  // ---- タッチドラッグで映像の中心を上下に平行移動させるトリム機能 ----
+  // 水平のはずの床が坂道のように見えるなど、映像の中心ズレを指で微調整するためのもの。
+  // 視点操作(ジャイロ)とは独立していて、タッチでしか変更されない。回転ではなく平行移動。
+  let vShift = 0;
+  let rollOffset = 0; // 傾き(ロール)補正。床が全体的に左右に傾いて見える場合に使う
   const rollAxis = new THREE.Vector3(0,0,1);
   const rollQuat = new THREE.Quaternion();
-  let dragActive = false, dragStartX = 0, dragStartY = 0, dragStartTime = 0, dragStartPitchOffset = 0;
+  let dragActive = false, dragStartX = 0, dragStartY = 0, dragStartTime = 0, dragStartVShift = 0;
 
   const TAP_MOVE_LIMIT = 12;   // これ以上動いたらドラッグ扱い(タップとみなさない)
   const DOUBLE_TAP_MS = 320;   // この時間内の同じ側のタップをダブルタップとみなす
@@ -241,13 +243,14 @@
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     dragStartTime = performance.now();
-    dragStartPitchOffset = pitchOffset;
+    dragStartVShift = vShift;
   });
   stageEl.addEventListener('pointermove', (e)=>{
     if(!dragActive) return;
     const dy = e.clientY - dragStartY;
-    pitchOffset = THREE.MathUtils.clamp(dragStartPitchOffset - dy*0.15, -90, 90);
-    showHint('縦方向の補正: ' + Math.round(pitchOffset) + '°', 900);
+    vShift = THREE.MathUtils.clamp(dragStartVShift - dy*0.0006, -0.3, 0.3);
+    applyMapping();
+    showHint('映像の中心を上下にシフト: ' + Math.round(vShift*100) + '%', 900);
   });
   stageEl.addEventListener('pointerup', (e)=>{
     dragActive = false;
@@ -354,7 +357,7 @@
     texR.minFilter = THREE.LinearFilter;
     texR.format = THREE.RGBFormat;
 
-    applyFlip(); // 左右半分への割り当てと、上下反転の状態を反映
+    applyMapping(); // 左右半分への割り当てと、上下反転・上下シフトの状態を反映
 
     const meshL = new THREE.Mesh(geoHalf, new THREE.MeshBasicMaterial({map: texL}));
     meshL.layers.set(1);
@@ -681,6 +684,20 @@
     orient = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
   }
 
+  // 候補のyawOffsetを与えたときに、実際どれだけ正面からズレるかを実測するための関数。
+  // 内部の回転計算の符号を推測せず、その場で試して確かめることで確実に正しい方向を導く。
+  const testQuat = new THREE.Quaternion();
+  const testFwd = new THREE.Vector3();
+  function measureYawErrorDeg(candidateYawOffset){
+    setQuaternion(testQuat, alpha - candidateYawOffset, beta, gamma, orient);
+    if(rollOffset !== 0){
+      rollQuat.setFromAxisAngle(rollAxis, THREE.MathUtils.degToRad(rollOffset));
+      testQuat.multiply(rollQuat);
+    }
+    testFwd.set(0,0,-1).applyQuaternion(testQuat);
+    return THREE.MathUtils.radToDeg(Math.atan2(testFwd.x, -testFwd.z));
+  }
+
   // ---------- 頭振り(シェイク)検知 ----------
   let yawHistory = [];
   let lastShakeTime = 0;
@@ -715,7 +732,7 @@
   function animate(){
     if(!running) return;
     requestAnimationFrame(animate);
-    setQuaternion(cameraGroup.quaternion, alpha - yawOffset, beta - pitchOffset, gamma, orient);
+    setQuaternion(cameraGroup.quaternion, alpha - yawOffset, beta, gamma, orient);
     if(rollOffset !== 0){
       // カメラの視線方向(ローカルZ軸)を軸に回転させることで、見ている方向は変えずに傾きだけを補正する
       rollQuat.setFromAxisAngle(rollAxis, THREE.MathUtils.degToRad(rollOffset));
@@ -729,12 +746,13 @@
       const remainMs = recenterDeadline - now;
       if(remainMs <= 0){
         recenterPending = false;
-        // raw な alpha 値ではなく、実際に今描画されている方向を基準に正面を合わせる。
-        // (raw alphaを直接使うと、メニュー開閉時の頭の向きの違いによって
-        //  180度反対に設定されてしまう不具合があったため)
-        const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(cameraGroup.quaternion);
-        const currentYawDeg = THREE.MathUtils.radToDeg(Math.atan2(fwd.x, -fwd.z));
-        yawOffset += currentYawDeg;
+        // 現在のyawOffsetでのズレを実測し、さらに1度ずらしたときの変化量(傾き)も実測することで、
+        // 内部の回転計算の符号がどちらであっても関係なく、正しい補正量を逆算する。
+        const e0 = measureYawErrorDeg(yawOffset);
+        const e1 = measureYawErrorDeg(yawOffset + 1);
+        let slope = e1 - e0;
+        if(Math.abs(slope) < 0.05) slope = 1; // 万が一傾きがほぼ0だった場合の保険
+        yawOffset = yawOffset - e0 / slope;
         showHint('正面を再設定しました', 1500);
       } else {
         const sec = Math.ceil(remainMs/1000);
