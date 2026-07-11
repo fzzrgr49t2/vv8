@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0a0c">
 <title>SBS 180 Gyro VR Player</title>
 <style>
   :root{
@@ -166,15 +170,15 @@
   let running = false;
 
   // ---- メニューのレイアウト(ボタン・シークバーの位置とサイズをここで一元管理) ----
-  const CANVAS_W = 1400, CANVAS_H = 640;
-  const MENU_W = 2.2, MENU_H = MENU_W * (CANVAS_H/CANVAS_W);
+  const CANVAS_W = 2000, CANVAS_H = 560;
+  const MENU_W = 3.0, MENU_H = MENU_W * (CANVAS_H/CANVAS_W);
   const DWELL_MS = 650;
   const RECENTER_COUNTDOWN_MS = 3000;
 
-  const CLOSE_BTN    = {cx:1316, cy:70,  r:48};
-  const RECENTER_BTN = {cx:1180, cy:70,  r:48};
+  const CLOSE_BTN    = {cx:1916, cy:70,  r:48};
+  const RECENTER_BTN = {cx:1780, cy:70,  r:48};
   const PLAY_BTN     = {cx:170,  cy:CANVAS_H-110, r:90};
-  const SEEK_BAR     = {x:340,  y:CANVAS_H-150, w:760, h:80};
+  const SEEK_BAR     = {x:340,  y:CANVAS_H-150, w:1352, h:84};
   const PREVIEW_W = 260, PREVIEW_H = 146;
 
   let menuGroup, menuCanvas, menuCtx, menuTexture, hitPlane;
