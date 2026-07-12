@@ -657,11 +657,13 @@
   let recenterPending = false;
   let recenterDeadline = 0;
   let recenterLastShownSec = -1;
+  let recenterSamples = []; // カウントダウン中に集めた「向きのズレ」のサンプル(ノイズ平均化用)
 
   function startRecenterCountdown(){
     recenterPending = true;
     recenterDeadline = performance.now() + RECENTER_COUNTDOWN_MS;
     recenterLastShownSec = -1;
+    recenterSamples = [];
   }
 
   function setQuaternion(quaternion, alphaDeg, betaDeg, gammaDeg, orientDeg){
@@ -744,15 +746,35 @@
     // センター再設定のカウントダウン(メニューの開閉状態に関係なく毎フレーム進める)
     if(recenterPending){
       const remainMs = recenterDeadline - now;
+
+      // コンパス(alpha)はノイズが乗りやすいため、毎フレームのズレを記録しておき、
+      // 直近0.3秒分の平均を最終的な補正に使うことでブレの影響を減らす。
+      const eNow = measureYawErrorDeg(yawOffset);
+      recenterSamples.push({t: now, err: eNow});
+      while(recenterSamples.length && now - recenterSamples[0].t > 300) recenterSamples.shift();
+
       if(remainMs <= 0){
         recenterPending = false;
-        // 現在のyawOffsetでのズレを実測し、さらに1度ずらしたときの変化量(傾き)も実測することで、
-        // 内部の回転計算の符号がどちらであっても関係なく、正しい補正量を逆算する。
-        const e0 = measureYawErrorDeg(yawOffset);
+
+        // 角度の円環平均(360度で一周するため、単純な数値平均ではなく
+        // sin/cosに変換してから平均し、ノイズの影響を滑らかにする)
+        let sumSin = 0, sumCos = 0;
+        for(const s of recenterSamples){
+          const r = THREE.MathUtils.degToRad(s.err);
+          sumSin += Math.sin(r); sumCos += Math.cos(r);
+        }
+        const e0 = recenterSamples.length
+          ? THREE.MathUtils.radToDeg(Math.atan2(sumSin, sumCos))
+          : eNow;
+
+        // さらに1度ずらしたときの変化量(傾き)を実測し、
+        // 内部の回転計算の符号がどちらであっても関係なく正しい補正量を逆算する。
         const e1 = measureYawErrorDeg(yawOffset + 1);
-        let slope = e1 - e0;
+        let slope = e1 - eNow;
         if(Math.abs(slope) < 0.05) slope = 1; // 万が一傾きがほぼ0だった場合の保険
+
         yawOffset = yawOffset - e0 / slope;
+        recenterSamples = [];
         showHint('正面を再設定しました', 1500);
       } else {
         const sec = Math.ceil(remainMs/1000);
@@ -881,6 +903,7 @@
   function stop(){
     running = false;
     recenterPending = false;
+    recenterSamples = [];
     releaseWakeLock();
     video.pause();
     window.removeEventListener('deviceorientation', onDeviceOrientation);
