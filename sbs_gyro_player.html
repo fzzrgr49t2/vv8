@@ -46,7 +46,7 @@
   }
   #enter.ready{opacity:1; pointer-events:auto;}
 
-  #stage{position:fixed; inset:0; display:none; background:#000; touch-action:none;}
+  #stage{position:fixed; inset:0; display:none; background:#000; touch-action:none; overflow:hidden;}
   #stage video{display:none;}
   canvas{display:block; width:100%; height:100%;}
 
@@ -100,7 +100,7 @@
     再生中に頭を素早く左右に振るとメニューが出ます。<br>
     ボタンやバーをしばらく見つめる(注視)と選択されます。<br>
     正面がズレたら、メニュー内の⟲アイコンを見つめてください。3・2・1のカウントダウン後に再設定されます。<br>
-    床が坂道のように傾いて見えるときは、画面を<strong>指で上下にドラッグ</strong>すると映像の中心を平行移動できます(HUDの「中心を上へ/下へ」ボタンでも可)。<br>
+    床が坂道のように傾いて見えるときは、HUDの「中心を上へ/下へ」ボタンで映像位置を調整できます。<br>
     画面の左右どちらかを<strong>すばやく2回タップ</strong>すると、10秒戻る/進むができます。</p>
   </div>
 
@@ -122,6 +122,7 @@
     <button id="tiltDownBtn" style="margin-right:6px;">中心を下へ</button>
     <button id="tiltUpBtn" style="margin-right:8px;">中心を上へ</button>
     <button id="flipBtn" style="margin-right:8px;">上下反転</button>
+    <button id="muteBtn" style="margin-right:8px;">ミュート</button>
     <button id="exitBtn">戻る</button>
   </div>
   <div id="hint">頭を素早く左右に振るとメニューが出ます</div>
@@ -140,17 +141,18 @@
   const enterBtn = document.getElementById('enter');
   const exitBtn = document.getElementById('exitBtn');
   const flipBtn = document.getElementById('flipBtn');
+  const muteBtn = document.getElementById('muteBtn');
   const tiltDownBtn = document.getElementById('tiltDownBtn');
   const tiltUpBtn = document.getElementById('tiltUpBtn');
   const rollLeftBtn = document.getElementById('rollLeftBtn');
   const rollRightBtn = document.getElementById('rollRightBtn');
   const hudEl = document.getElementById('hud');
 
-  // 動画テクスチャの割り当て(左右半分+上下反転+上下シフト)をまとめて反映する
+  // 動画テクスチャの割り当て(左右半分+上下反転)を反映する
   function applyMapping(){
     if(!texL || !texR) return;
     const rep = flipV ? -1 : 1;
-    const off = (flipV ? 1 : 0) + rep * vShift;
+    const off = flipV ? 1 : 0;
     texL.repeat.set(0.5, rep); texL.offset.set(0, off);
     texR.repeat.set(0.5, rep); texR.offset.set(0.5, off);
   }
@@ -162,12 +164,12 @@
     showHint(flipV ? '上下を反転しました' : '上下反転を解除しました', 1200);
   });
 
-  // 映像の中心を上下に「平行移動」させる(回転ではなく、動画テクスチャの位置そのものをずらす)
-  // 水平な床が坂道のように見えるのは、映像の中心がズレていることが原因のため。
+  // 映像の中心を上下にずらす。両目分の映像が描画されているキャンバスそのものを
+  // CSSで単純に上下移動させる方式(球体テクスチャの操作より確実に効果が出る)。
   function adjustVShift(delta){
-    vShift = THREE.MathUtils.clamp(vShift + delta, -0.3, 0.3);
-    applyMapping();
-    showHint('映像の中心を上下にシフト: ' + Math.round(vShift*100) + '%', 900);
+    vShiftPx = THREE.MathUtils.clamp(vShiftPx + delta, -200, 200);
+    if(renderer) renderer.domElement.style.transform = 'translateY(' + vShiftPx + 'px)';
+    showHint('映像の位置: ' + (vShiftPx>0?'+':'') + vShiftPx + 'px', 900);
   }
   // 傾き(ロール)をボタンで調整。床が全体的に左右どちらかに傾いて見えるときはこちらを使う。
   function adjustRoll(delta){
@@ -194,8 +196,8 @@
     el.addEventListener('pointerleave', endHold);
     el.addEventListener('pointercancel', endHold);
   }
-  bindHoldButton(tiltDownBtn, adjustVShift, -0.01);
-  bindHoldButton(tiltUpBtn, adjustVShift, 0.01);
+  bindHoldButton(tiltDownBtn, adjustVShift, -5);
+  bindHoldButton(tiltUpBtn, adjustVShift, 5);
   bindHoldButton(rollLeftBtn, adjustRoll, -3);
   bindHoldButton(rollRightBtn, adjustRoll, 3);
 
@@ -224,14 +226,13 @@
     }, duration || 1500);
   }
 
-  // ---- タッチドラッグで映像の中心を上下に平行移動させるトリム機能 ----
-  // 水平のはずの床が坂道のように見えるなど、映像の中心ズレを指で微調整するためのもの。
-  // 視点操作(ジャイロ)とは独立していて、タッチでしか変更されない。回転ではなく平行移動。
-  let vShift = 0;
-  let rollOffset = 0; // 傾き(ロール)補正。床が全体的に左右に傾いて見える場合に使う
+  // ---- 傾き(ロール)補正 ----
+  let rollOffset = 0; // 床が全体的に左右に傾いて見える場合に使う
   const rollAxis = new THREE.Vector3(0,0,1);
   const rollQuat = new THREE.Quaternion();
-  let dragActive = false, dragStartX = 0, dragStartY = 0, dragStartTime = 0, dragStartVShift = 0;
+
+  // ---- 画面タップでのダブルタップ判定(10秒スキップ用) ----
+  let tapStartX = 0, tapStartY = 0, tapStartTime = 0;
 
   const TAP_MOVE_LIMIT = 12;   // これ以上動いたらドラッグ扱い(タップとみなさない)
   const DOUBLE_TAP_MS = 320;   // この時間内の同じ側のタップをダブルタップとみなす
@@ -239,24 +240,14 @@
 
   stageEl.addEventListener('pointerdown', (e)=>{
     flashHud();
-    dragActive = true;
-    dragStartX = e.clientX;
-    dragStartY = e.clientY;
-    dragStartTime = performance.now();
-    dragStartVShift = vShift;
-  });
-  stageEl.addEventListener('pointermove', (e)=>{
-    if(!dragActive) return;
-    const dy = e.clientY - dragStartY;
-    vShift = THREE.MathUtils.clamp(dragStartVShift - dy*0.0006, -0.3, 0.3);
-    applyMapping();
-    showHint('映像の中心を上下にシフト: ' + Math.round(vShift*100) + '%', 900);
+    tapStartX = e.clientX;
+    tapStartY = e.clientY;
+    tapStartTime = performance.now();
   });
   stageEl.addEventListener('pointerup', (e)=>{
-    dragActive = false;
-    const moved = Math.hypot(e.clientX-dragStartX, e.clientY-dragStartY);
-    const elapsed = performance.now() - dragStartTime;
-    if(moved > TAP_MOVE_LIMIT || elapsed > 500) return; // ドラッグとして扱ったものはタップ判定しない
+    const moved = Math.hypot(e.clientX-tapStartX, e.clientY-tapStartY);
+    const elapsed = performance.now() - tapStartTime;
+    if(moved > TAP_MOVE_LIMIT || elapsed > 500) return; // 指を動かした場合はタップ扱いしない
 
     const side = e.clientX < window.innerWidth/2 ? 'left' : 'right';
     const now = performance.now();
@@ -268,7 +259,6 @@
       lastTapSide = side;
     }
   });
-  stageEl.addEventListener('pointercancel', ()=>{ dragActive = false; });
 
   function skipSeconds(delta, x){
     if(!video.duration) return;
@@ -310,6 +300,7 @@
 
   // ---------- three.js セットアップ ----------
   let renderer, scene, cameraGroup, cameraL, cameraR;
+  let vShiftPx = 0; // 映像全体(両目分)を上下にずらすピクセル数
   let texL, texR;
   let flipV = false; // 上下反転の状態
   let running = false;
@@ -357,7 +348,7 @@
     texR.minFilter = THREE.LinearFilter;
     texR.format = THREE.RGBFormat;
 
-    applyMapping(); // 左右半分への割り当てと、上下反転・上下シフトの状態を反映
+    applyMapping(); // 左右半分への割り当てと、上下反転の状態を反映
 
     const meshL = new THREE.Mesh(geoHalf, new THREE.MeshBasicMaterial({map: texL}));
     meshL.layers.set(1);
@@ -894,6 +885,13 @@
   enterBtn.addEventListener('click', start);
   exitBtn.addEventListener('pointerdown', (e)=>e.stopPropagation());
   exitBtn.addEventListener('click', stop);
+
+  muteBtn.addEventListener('pointerdown', (e)=>e.stopPropagation());
+  muteBtn.addEventListener('click', ()=>{
+    video.muted = !video.muted;
+    muteBtn.textContent = video.muted ? 'ミュート解除' : 'ミュート';
+    flashHud();
+  });
 })();
 </script>
 </body>
