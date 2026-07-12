@@ -630,8 +630,17 @@
     if(!renderer) return;
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w,h);
-    cameraL.aspect = (w/2)/h; cameraL.updateProjectionMatrix();
-    cameraR.aspect = (w/2)/h; cameraR.updateProjectionMatrix();
+
+    // 中央のスペーサー分を考慮した、実際の片目分の幅
+    const halfW = (w - CENTER_GAP_PX) / 2;
+    cameraL.aspect = halfW/h; cameraL.updateProjectionMatrix();
+    cameraR.aspect = halfW/h; cameraR.updateProjectionMatrix();
+
+    // レティクル(照準ドット)の位置も、各目の映像の中心に正確に合わせる
+    const leftCenter = halfW / 2;
+    const rightCenter = w - halfW / 2;
+    reticleL.style.left = leftCenter + 'px';
+    reticleR.style.left = rightCenter + 'px';
   }
 
   // ---------- デバイスの向き → クォータニオン ----------
