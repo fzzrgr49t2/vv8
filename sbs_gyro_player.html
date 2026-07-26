@@ -395,14 +395,19 @@
     // VR180(魚眼): 正面を中心にした半球(横180度・縦180度)
     // 平面SBS(疑似ジャイロ): 普通のカメラ画角程度の小さな範囲だけに映像を貼り、
     //   その外は真っ暗にすることで「宙に浮いた大きなスクリーン」のような見え方にする
+    //
+    // phiStartは「テクスチャ中心(u=0.5)が-Z軸(カメラのデフォルト正面)に一致する」
+    // よう、phiStart + phiLength/2 = 3π/2 となる値を選んでいる。
+    // (以前はphiStart=π/2を使っていたため、テクスチャ中心が-X軸に来てしまい、
+    //  カメラの正面と90度ズレていた)
     let geoHalf;
     if(contentMode === 'flat'){
       const hfov = THREE.MathUtils.degToRad(FLAT_HFOV_DEG);
       const vfov = THREE.MathUtils.degToRad(FLAT_VFOV_DEG);
       geoHalf = new THREE.SphereGeometry(500, 60, 40,
-        Math.PI/2 - hfov/2, hfov, Math.PI/2 - vfov/2, vfov);
+        (3*Math.PI/2) - hfov/2, hfov, Math.PI/2 - vfov/2, vfov);
     } else {
-      geoHalf = new THREE.SphereGeometry(500, 60, 40, Math.PI/2, Math.PI, 0, Math.PI);
+      geoHalf = new THREE.SphereGeometry(500, 60, 40, Math.PI, Math.PI, 0, Math.PI);
     }
     geoHalf.scale(-1,1,1);
 
@@ -732,11 +737,8 @@
   const q1 = new THREE.Quaternion(-Math.sqrt(0.5),0,0,Math.sqrt(0.5));
 
   let alpha=0, beta=0, gamma=0, orient=0;
-  // ベースのズレ補正:何もしない状態だと右を向いたところが正面になってしまうため、
-  // 起動時点であらかじめ90度分ずらしておく。手動でのセンター再設定はこの値からの
-  // 追加調整として働く(基準がリセットされるわけではない)。
-  const BASE_YAW_OFFSET_DEG = 90;
-  let yawOffset = BASE_YAW_OFFSET_DEG;
+  let yawOffset = 0; // センター再設定用のオフセット(度)。ジオメトリ側の軸ズレを修正したため、
+                      // 以前のような起動時ベース補正(BASE_YAW_OFFSET_DEG)は不要になった。
 
   // センター再設定のカウントダウンは、常時動いているrequestAnimationFrameループ側で管理する
   // (setIntervalだとメニューの開閉やタブの状態次第で止まってしまうことがあるため)
