@@ -104,6 +104,7 @@
   <div>
     <h1>SBS 180° ジャイロプレーヤー</h1>
     <p>SBS(左右分割)形式の動画を選んで、ジャイロで見渡せます。魚眼のVR180か、普通のSBS動画かを下で選んでください。<br>
+    複数選択すると、ゴーグルを着けたまま<strong>視線だけで動画を切り替え</strong>られます。<br>
     再生中に頭を素早く左右に振るとメニューが出ます。<br>
     ボタンやバーをしばらく見つめる(注視)と選択されます。<br>
     正面がズレたら、メニュー内の⟲アイコンを見つめてください。3・2・1のカウントダウン後に再設定されます。<br>
@@ -113,7 +114,7 @@
 
   <label class="file-btn">
     動画ファイルを選択
-    <input type="file" id="fileInput" accept="video/*">
+    <input type="file" id="fileInput" accept="video/*" multiple>
   </label>
   <div id="filename"></div>
 
@@ -283,6 +284,8 @@
   }
 
   let fileReady = false;
+  let videoList = []; // {name, url} の配列
+  let currentVideoIndex = 0;
 
   function showError(msg){
     errEl.textContent = msg;
@@ -300,15 +303,36 @@
   previewVideo.addEventListener('seeked', ()=>{ previewSeeking = false; });
 
   fileInput.addEventListener('change', (e)=>{
-    const f = e.target.files[0];
-    if(!f) return;
-    const url = URL.createObjectURL(f);
-    video.src = url;
-    previewVideo.src = url;
-    filenameEl.textContent = f.name;
+    const files = Array.from(e.target.files || []);
+    if(!files.length) return;
+    videoList = files.map(f => ({name: f.name, url: URL.createObjectURL(f)}));
+    currentVideoIndex = 0;
+    loadCurrentVideo(false);
+    filenameEl.textContent = videoList.length > 1
+      ? videoList.length + '個の動画を選択(最初: ' + videoList[0].name + ')'
+      : videoList[0].name;
     fileReady = true;
     enterBtn.classList.add('ready');
   });
+
+  // 動画リストの中から指定インデックスを読み込む。VR再生中の切り替えにも使う。
+  function loadCurrentVideo(autoplay){
+    if(!videoList.length) return;
+    const item = videoList[currentVideoIndex];
+    video.src = item.url;
+    previewVideo.src = item.url;
+    if(autoplay){
+      video.currentTime = 0;
+      video.play().catch(()=>{});
+    }
+  }
+  // ゴーグルを着けたまま、視線操作だけで動画を切り替えるための関数
+  function switchVideo(delta){
+    if(videoList.length <= 1) return;
+    currentVideoIndex = (currentVideoIndex + delta + videoList.length) % videoList.length;
+    loadCurrentVideo(true);
+    showHint('動画を切り替え: ' + videoList[currentVideoIndex].name, 1500);
+  }
 
   const modeVr180Btn = document.getElementById('modeVr180Btn');
   const modeFlatBtn = document.getElementById('modeFlatBtn');
@@ -345,6 +369,8 @@
   const CLOSE_BTN    = {cx:1916, cy:70,  r:48};
   const RECENTER_BTN = {cx:1780, cy:70,  r:58};
   const PLAY_BTN     = {cx:170,  cy:CANVAS_H-110, r:90};
+  const PREV_BTN     = {cx:120,  cy:70,  r:48};
+  const NEXT_BTN     = {cx:256,  cy:70,  r:48};
   const SEEK_BAR     = {x:340,  y:CANVAS_H-150, w:1352, h:84};
   const PREVIEW_W = 260, PREVIEW_H = 146;
 
@@ -460,6 +486,8 @@
     if(Math.hypot(px-CLOSE_BTN.cx, py-CLOSE_BTN.cy) < CLOSE_BTN.r) return {region:'close'};
     if(Math.hypot(px-RECENTER_BTN.cx, py-RECENTER_BTN.cy) < RECENTER_BTN.r) return {region:'recenter'};
     if(Math.hypot(px-PLAY_BTN.cx, py-PLAY_BTN.cy) < PLAY_BTN.r) return {region:'play'};
+    if(Math.hypot(px-PREV_BTN.cx, py-PREV_BTN.cy) < PREV_BTN.r) return {region:'prev'};
+    if(Math.hypot(px-NEXT_BTN.cx, py-NEXT_BTN.cy) < NEXT_BTN.r) return {region:'next'};
 
     if(px>=SEEK_BAR.x && px<=SEEK_BAR.x+SEEK_BAR.w && py>=SEEK_BAR.y-30 && py<=SEEK_BAR.y+SEEK_BAR.h+30){
       return {region:'seek', frac: Math.min(1,Math.max(0,(px-SEEK_BAR.x)/SEEK_BAR.w))};
@@ -483,6 +511,16 @@
 
     drawCircleButton(ctx, CLOSE_BTN.cx, CLOSE_BTN.cy, CLOSE_BTN.r, hoverRegion==='close'?dwellFrac:0, '✕', 26);
     drawCircleButton(ctx, RECENTER_BTN.cx, RECENTER_BTN.cy, RECENTER_BTN.r, hoverRegion==='recenter'?dwellFrac:0, '⟲', 32);
+
+    // 動画が複数あるときだけ、前/次への切り替えボタンを表示
+    if(videoList.length > 1){
+      drawCircleButton(ctx, PREV_BTN.cx, PREV_BTN.cy, PREV_BTN.r, hoverRegion==='prev'?dwellFrac:0, '⏮', 28);
+      drawCircleButton(ctx, NEXT_BTN.cx, NEXT_BTN.cy, NEXT_BTN.r, hoverRegion==='next'?dwellFrac:0, '⏭', 28);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.font = '20px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText((currentVideoIndex+1) + ' / ' + videoList.length, (PREV_BTN.cx+NEXT_BTN.cx)/2, PREV_BTN.cy + PREV_BTN.r + 30);
+    }
 
     const paused = video.paused;
     drawCircleButton(ctx, PLAY_BTN.cx, PLAY_BTN.cy, PLAY_BTN.r, hoverRegion==='play'?dwellFrac:0, paused?'▶':'❚❚', 54);
@@ -660,6 +698,10 @@
       startRecenterCountdown();
     } else if(region === 'play'){
       if(video.paused) video.play(); else video.pause();
+    } else if(region === 'prev'){
+      switchVideo(-1);
+    } else if(region === 'next'){
+      switchVideo(1);
     } else if(region === 'seek'){
       const dur = video.duration || 0;
       if(dur) video.currentTime = hoverFrac * dur;
