@@ -732,7 +732,11 @@
   const q1 = new THREE.Quaternion(-Math.sqrt(0.5),0,0,Math.sqrt(0.5));
 
   let alpha=0, beta=0, gamma=0, orient=0;
-  let yawOffset = 0; // センター再設定用のオフセット(度)
+  // ベースのズレ補正:何もしない状態だと右を向いたところが正面になってしまうため、
+  // 起動時点であらかじめ90度分ずらしておく。手動でのセンター再設定はこの値からの
+  // 追加調整として働く(基準がリセットされるわけではない)。
+  const BASE_YAW_OFFSET_DEG = 90;
+  let yawOffset = BASE_YAW_OFFSET_DEG;
 
   // センター再設定のカウントダウンは、常時動いているrequestAnimationFrameループ側で管理する
   // (setIntervalだとメニューの開閉やタブの状態次第で止まってしまうことがあるため)
