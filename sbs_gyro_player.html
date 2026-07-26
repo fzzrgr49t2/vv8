@@ -39,6 +39,13 @@
   }
   #filename{font-size:12px; color:var(--accent); min-height:16px;}
 
+  .mode-row{display:flex; gap:10px;}
+  .mode-btn{
+    background:transparent; border:1px solid var(--line); color:var(--dim);
+    padding:9px 16px; border-radius:20px; font-size:12px; cursor:pointer;
+  }
+  .mode-btn.active{border-color:var(--accent); color:var(--accent);}
+
   #enter{
     background:var(--accent); color:#06231d; border:none; padding:14px 30px;
     border-radius:10px; font-size:14px; font-weight:600; cursor:pointer;
@@ -96,7 +103,7 @@
 <div id="start">
   <div>
     <h1>SBS 180° ジャイロプレーヤー</h1>
-    <p>VR180形式(左右分割・半球)の動画を選んで、ジャイロで見渡せます。<br>
+    <p>SBS(左右分割)形式の動画を選んで、ジャイロで見渡せます。魚眼のVR180か、普通のSBS動画かを下で選んでください。<br>
     再生中に頭を素早く左右に振るとメニューが出ます。<br>
     ボタンやバーをしばらく見つめる(注視)と選択されます。<br>
     正面がズレたら、メニュー内の⟲アイコンを見つめてください。3・2・1のカウントダウン後に再設定されます。<br>
@@ -109,6 +116,11 @@
     <input type="file" id="fileInput" accept="video/*">
   </label>
   <div id="filename"></div>
+
+  <div class="mode-row">
+    <button class="mode-btn active" id="modeVr180Btn" type="button">180°(魚眼)</button>
+    <button class="mode-btn" id="modeFlatBtn" type="button">平面(疑似ジャイロ)</button>
+  </div>
 
   <button id="enter">ジャイロを許可してVR再生</button>
   <div id="err"></div>
@@ -298,9 +310,26 @@
     enterBtn.classList.add('ready');
   });
 
+  const modeVr180Btn = document.getElementById('modeVr180Btn');
+  const modeFlatBtn = document.getElementById('modeFlatBtn');
+  modeVr180Btn.addEventListener('click', ()=>{
+    contentMode = 'vr180';
+    modeVr180Btn.classList.add('active');
+    modeFlatBtn.classList.remove('active');
+  });
+  modeFlatBtn.addEventListener('click', ()=>{
+    contentMode = 'flat';
+    modeFlatBtn.classList.add('active');
+    modeVr180Btn.classList.remove('active');
+  });
+
   // ---------- three.js セットアップ ----------
   let renderer, scene, cameraGroup, cameraL, cameraR;
   let vShiftPx = 0; // 映像全体(両目分)を上下にずらすピクセル数
+  let contentMode = 'vr180'; // 'vr180' または 'flat'
+  let builtMode = null; // 実際にシーンを構築した時点でのモード(切り替え検知用)
+  const FLAT_HFOV_DEG = 100; // 平面SBSモードで映像を貼り付ける横方向の角度(一般的なカメラの画角の目安)
+  const FLAT_VFOV_DEG = 65;  // 同じく縦方向
   let texL, texR;
   let flipV = false; // 上下反転の状態
   let running = false;
@@ -336,8 +365,19 @@
     cameraGroup.add(cameraL);
     cameraGroup.add(cameraR);
 
-    // 正面を中心にした半球(横180度・縦180度)。左目・右目で完全に同じ形状を使う。
-    const geoHalf = new THREE.SphereGeometry(500, 60, 40, Math.PI/2, Math.PI, 0, Math.PI);
+    // 動画の種類によってジオメトリの角度範囲を切り替える。
+    // VR180(魚眼): 正面を中心にした半球(横180度・縦180度)
+    // 平面SBS(疑似ジャイロ): 普通のカメラ画角程度の小さな範囲だけに映像を貼り、
+    //   その外は真っ暗にすることで「宙に浮いた大きなスクリーン」のような見え方にする
+    let geoHalf;
+    if(contentMode === 'flat'){
+      const hfov = THREE.MathUtils.degToRad(FLAT_HFOV_DEG);
+      const vfov = THREE.MathUtils.degToRad(FLAT_VFOV_DEG);
+      geoHalf = new THREE.SphereGeometry(500, 60, 40,
+        Math.PI/2 - hfov/2, hfov, Math.PI/2 - vfov/2, vfov);
+    } else {
+      geoHalf = new THREE.SphereGeometry(500, 60, 40, Math.PI/2, Math.PI, 0, Math.PI);
+    }
     geoHalf.scale(-1,1,1);
 
     texL = new THREE.VideoTexture(video);
@@ -682,8 +722,16 @@
     beta = e.beta || 0;
     gamma = e.gamma || 0;
   }
+  // 画面の向き(角度)を取得する。screen.orientation.angleが0度(正当な値)のとき、
+  // JSの||演算子だと「値なし」と誤判定してしまうため、型で正しく判定する。
+  function readScreenOrient(){
+    if(screen.orientation && typeof screen.orientation.angle === 'number'){
+      return screen.orientation.angle;
+    }
+    return window.orientation || 0;
+  }
   function onOrientationChange(){
-    orient = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    orient = readScreenOrient();
   }
 
   // 候補のyawOffsetを与えたときに、実際どれだけ正面からズレるかを実測するための関数。
@@ -734,6 +782,11 @@
   function animate(){
     if(!running) return;
     requestAnimationFrame(animate);
+
+    // orientationchangeイベント頼りだとタイミングによって更新が遅れることがあるため、
+    // 毎フレーム直接読み取って常に最新の画面の向きを反映する
+    orient = readScreenOrient();
+
     setQuaternion(cameraGroup.quaternion, alpha - yawOffset, beta, gamma, orient);
     if(rollOffset !== 0){
       // カメラの視線方向(ローカルZ軸)を軸に回転させることで、見ている方向は変えずに傾きだけを補正する
@@ -854,7 +907,15 @@
     startEl.style.display = 'none';
     stageEl.style.display = 'block';
 
-    if(!renderer) buildScene();
+    if(!renderer || builtMode !== contentMode){
+      if(renderer){
+        stageEl.removeChild(renderer.domElement);
+        renderer.dispose();
+        renderer = null;
+      }
+      buildScene();
+      builtMode = contentMode;
+    }
     resize();
 
     try{ await video.play(); }catch(e){ showError('動画の再生に失敗しました: ' + e.message); }
