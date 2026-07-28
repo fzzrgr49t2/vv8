@@ -46,6 +46,27 @@
   }
   .mode-btn.active{border-color:var(--accent); color:var(--accent);}
 
+  #gallery{
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(120px,1fr));
+    gap:10px; width:100%; max-width:560px;
+  }
+  .gallery-tile{
+    background:var(--panel); border:2px solid var(--line); border-radius:10px;
+    overflow:hidden; cursor:pointer; text-align:left;
+  }
+  .gallery-tile.selected{border-color:var(--accent);}
+  .thumb-wrap{
+    width:100%; aspect-ratio:16/9; background:#000;
+    display:flex; align-items:center; justify-content:center;
+    color:var(--dim); font-size:11px; overflow:hidden;
+  }
+  .thumb-wrap img{width:100%; height:100%; object-fit:cover; display:block;}
+  .gallery-name{
+    font-size:10px; color:var(--dim); padding:6px 8px; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis;
+  }
+  .gallery-tile.selected .gallery-name{color:var(--accent);}
+
   #enter{
     background:var(--accent); color:#06231d; border:none; padding:14px 30px;
     border-radius:10px; font-size:14px; font-weight:600; cursor:pointer;
@@ -104,7 +125,7 @@
   <div>
     <h1>SBS 180° ジャイロプレーヤー</h1>
     <p>SBS(左右分割)形式の動画を選んで、ジャイロで見渡せます。魚眼のVR180か、普通のSBS動画かを下で選んでください。<br>
-    複数選択すると、ゴーグルを着けたまま<strong>視線だけで動画を切り替え</strong>られます。<br>
+    複数選択すると、サムネイル一覧から見て選べます。ゴーグルを着けたまま<strong>視線だけで動画を切り替え</strong>られます。<br>
     再生中に頭を素早く左右に振るとメニューが出ます。<br>
     ボタンやバーをしばらく見つめる(注視)と選択されます。<br>
     正面がズレたら、メニュー内の⟲アイコンを見つめてください。3・2・1のカウントダウン後に再設定されます。<br>
@@ -113,10 +134,12 @@
   </div>
 
   <label class="file-btn">
-    動画ファイルを選択
+    動画ファイルを選択(複数可)
     <input type="file" id="fileInput" accept="video/*" multiple>
   </label>
   <div id="filename"></div>
+
+  <div id="gallery"></div>
 
   <div class="mode-row">
     <button class="mode-btn active" id="modeVr180Btn" type="button">180°(魚眼)</button>
@@ -284,48 +307,198 @@
   }
 
   let fileReady = false;
-  let videoList = []; // {name, url} の配列
-  let currentVideoIndex = 0;
+  let videoList = []; // {name, url, thumb} の配列
+  let currentVideoIndex = -1; // -1 = まだギャラリーで選んでいない
+  const galleryEl = document.getElementById('gallery');
 
   function showError(msg){
     errEl.textContent = msg;
     errEl.style.display = 'block';
   }
 
-  // シーク中のプレビュー用に、見えない2本目の動画を用意(YouTube風のサムネイル表示に使う)
+  // 事前生成サムネイル用に、見えない2本目の動画を用意(YouTube風のスプライト方式)
   const previewVideo = document.createElement('video');
   previewVideo.muted = true;
   previewVideo.playsInline = true;
   previewVideo.preload = 'auto';
   previewVideo.style.cssText = 'position:fixed; top:-9999px; left:-9999px; width:2px; height:2px; opacity:0;';
   document.body.appendChild(previewVideo);
-  let previewSeeking = false;
-  previewVideo.addEventListener('seeked', ()=>{ previewSeeking = false; });
 
   fileInput.addEventListener('change', (e)=>{
     const files = Array.from(e.target.files || []);
     if(!files.length) return;
-    videoList = files.map(f => ({name: f.name, url: URL.createObjectURL(f)}));
-    currentVideoIndex = 0;
-    loadCurrentVideo(false);
-    filenameEl.textContent = videoList.length > 1
-      ? videoList.length + '個の動画を選択(最初: ' + videoList[0].name + ')'
-      : videoList[0].name;
-    fileReady = true;
-    enterBtn.classList.add('ready');
+    videoList = files.map(f => ({name: f.name, url: URL.createObjectURL(f), thumb: null}));
+    currentVideoIndex = -1;
+    fileReady = false;
+    enterBtn.classList.remove('ready');
+    filenameEl.textContent = videoList.length + '個の動画。下の一覧からタップして選んでください';
+    buildGallery();
   });
 
+  // ---- サムネイル一覧(専用UI)の構築 ----
+  function buildGallery(){
+    galleryEl.innerHTML = '';
+    videoList.forEach((item, i)=>{
+      const tile = document.createElement('div');
+      tile.className = 'gallery-tile';
+      const thumbWrap = document.createElement('div');
+      thumbWrap.className = 'thumb-wrap';
+      thumbWrap.textContent = '読込中…';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'gallery-name';
+      nameEl.textContent = item.name;
+      tile.appendChild(thumbWrap);
+      tile.appendChild(nameEl);
+      tile.addEventListener('click', ()=> selectGalleryItem(i));
+      galleryEl.appendChild(tile);
+    });
+    generateThumbnails();
+  }
+
+  function selectGalleryItem(i){
+    currentVideoIndex = i;
+    loadCurrentVideo(false);
+    fileReady = true;
+    enterBtn.classList.add('ready');
+    Array.from(galleryEl.children).forEach((tile, idx)=>{
+      tile.classList.toggle('selected', idx === i);
+    });
+  }
+
+  function renderGalleryThumb(i){
+    const tile = galleryEl.children[i];
+    if(!tile) return;
+    const wrap = tile.querySelector('.thumb-wrap');
+    if(videoList[i].thumb){
+      wrap.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = videoList[i].thumb;
+      wrap.appendChild(img);
+    } else {
+      wrap.textContent = '(読込失敗)';
+    }
+  }
+
+  // フォルダから複数選んだ動画のサムネイルを、1本ずつ順番に生成する
+  // (同時に大量の<video>を作るとモバイルSafariで重くなるため、直列処理にしている)
+  async function generateThumbnails(){
+    const tempVideo = document.createElement('video');
+    tempVideo.muted = true;
+    tempVideo.playsInline = true;
+    tempVideo.preload = 'auto';
+    tempVideo.style.cssText = 'position:fixed; top:-9999px; left:-9999px; width:2px; height:2px;';
+    document.body.appendChild(tempVideo);
+
+    for(let i = 0; i < videoList.length; i++){
+      const item = videoList[i];
+      try{
+        await new Promise((resolve)=>{
+          let done = false;
+          const finish = ()=>{ if(done) return; done = true; cleanup(); resolve(); };
+          const onLoaded = ()=>{
+            const t = Math.min(1, (tempVideo.duration || 2) * 0.1);
+            try{ tempVideo.currentTime = t; }catch(e){ finish(); }
+          };
+          const onSeeked = ()=>{
+            try{
+              const vw = tempVideo.videoWidth, vh = tempVideo.videoHeight;
+              if(vw > 0 && vh > 0){
+                const canvas = document.createElement('canvas');
+                canvas.width = 160; canvas.height = 90;
+                const ctx = canvas.getContext('2d');
+                // SBS動画の左半分(左目用)だけを切り出して、普通の写真らしく見せる
+                ctx.drawImage(tempVideo, 0, 0, vw/2, vh, 0, 0, 160, 90);
+                item.thumb = canvas.toDataURL('image/jpeg', 0.7);
+              }
+            }catch(e){}
+            finish();
+          };
+          const onError = ()=> finish();
+          function cleanup(){
+            tempVideo.removeEventListener('loadedmetadata', onLoaded);
+            tempVideo.removeEventListener('seeked', onSeeked);
+            tempVideo.removeEventListener('error', onError);
+          }
+          tempVideo.addEventListener('loadedmetadata', onLoaded, {once:true});
+          tempVideo.addEventListener('seeked', onSeeked, {once:true});
+          tempVideo.addEventListener('error', onError, {once:true});
+          tempVideo.src = item.url;
+          // 5秒待っても終わらない場合はあきらめて次へ
+          setTimeout(finish, 5000);
+        });
+      }catch(e){}
+      renderGalleryThumb(i);
+    }
+    document.body.removeChild(tempVideo);
+  }
+
   // 動画リストの中から指定インデックスを読み込む。VR再生中の切り替えにも使う。
+  const SCRUB_THUMB_COUNT = 20;
+  let scrubThumbs = []; // {t, img} の配列。シークバーのプレビュー用に事前生成しておく
+
   function loadCurrentVideo(autoplay){
-    if(!videoList.length) return;
+    if(currentVideoIndex < 0 || !videoList.length) return;
     const item = videoList[currentVideoIndex];
     video.src = item.url;
     previewVideo.src = item.url;
+    scrubThumbs = [];
     if(autoplay){
       video.currentTime = 0;
       video.play().catch(()=>{});
     }
+    // 動画の長さが分かり次第、シークバー用のサムネイルをバックグラウンドで事前生成しておく
+    // (YouTubeのプレビューと同じ考え方:見つめた瞬間にライブでシークすると遅いため)
+    previewVideo.addEventListener('loadedmetadata', function onMeta(){
+      previewVideo.removeEventListener('loadedmetadata', onMeta);
+      generateScrubThumbs();
+    }, {once:true});
   }
+
+  // previewVideoを使って、動画全体からSCRUB_THUMB_COUNT枚のサムネイルを均等な間隔で
+  // あらかじめキャプチャしておく。1枚ずつ順番に処理し、できたものから随時使えるようにする。
+  async function generateScrubThumbs(){
+    const dur = previewVideo.duration;
+    if(!dur || !isFinite(dur)) return;
+
+    for(let i = 0; i < SCRUB_THUMB_COUNT; i++){
+      const t = (i + 0.5) / SCRUB_THUMB_COUNT * dur;
+      const img = await captureFrameAt(previewVideo, t);
+      if(img) scrubThumbs.push({t, img});
+    }
+    scrubThumbs.sort((a,b)=>a.t-b.t);
+  }
+
+  function captureFrameAt(vidEl, t){
+    return new Promise((resolve)=>{
+      let done = false;
+      const finish = (result)=>{ if(done) return; done = true; cleanup(); resolve(result); };
+      const onSeeked = ()=>{
+        try{
+          const vw = vidEl.videoWidth, vh = vidEl.videoHeight;
+          if(vw > 0){
+            const canvas = document.createElement('canvas');
+            canvas.width = 260; canvas.height = 146;
+            const ctx = canvas.getContext('2d');
+            // SBS動画の左半分(左目用)だけを切り出す
+            ctx.drawImage(vidEl, 0, 0, vw/2, vh, 0, 0, 260, 146);
+            const img = new Image();
+            img.src = canvas.toDataURL('image/jpeg', 0.6);
+            finish(img);
+          } else finish(null);
+        }catch(e){ finish(null); }
+      };
+      const onError = ()=> finish(null);
+      function cleanup(){
+        vidEl.removeEventListener('seeked', onSeeked);
+        vidEl.removeEventListener('error', onError);
+      }
+      vidEl.addEventListener('seeked', onSeeked, {once:true});
+      vidEl.addEventListener('error', onError, {once:true});
+      try{ vidEl.currentTime = t; }catch(e){ finish(null); }
+      setTimeout(()=>finish(null), 3000); // 3秒待っても終わらなければあきらめて次へ
+    });
+  }
+
   // ゴーグルを着けたまま、視線操作だけで動画を切り替えるための関数
   function switchVideo(delta){
     if(videoList.length <= 1) return;
@@ -371,12 +544,18 @@
   const PLAY_BTN     = {cx:170,  cy:CANVAS_H-110, r:90};
   const PREV_BTN     = {cx:120,  cy:70,  r:48};
   const NEXT_BTN     = {cx:256,  cy:70,  r:48};
+  const LIST_BTN     = {cx:392,  cy:70,  r:48};
   const SEEK_BAR     = {x:340,  y:CANVAS_H-150, w:1352, h:84};
+
+  // 動画一覧グリッドのレイアウト
+  const GRID = {x:40, y:150, w:CANVAS_W-80, h:CANVAS_H-190, tileW:220, tileH:130, gap:16};
   const PREVIEW_W = 260, PREVIEW_H = 146;
 
   let menuGroup, menuCanvas, menuCtx, menuTexture, hitPlane;
   let hoverRegion = null, hoverStart = 0, hoverFrac = 0;
-  let lastPreviewTarget = -1, lastPreviewReqAt = 0;
+  let lockedRegion = null; // 直前に選択した場所。視線が一度離れるまで再選択できないようにする
+  let listMode = false; // メニュー内の動画一覧グリッドを表示中かどうか
+  const thumbImgCache = {}; // インデックス→Imageオブジェクト(一覧グリッド描画用)
 
   function buildScene(){
     scene = new THREE.Scene();
@@ -471,12 +650,15 @@
     menuGroup.lookAt(0,0,0);
     menuGroup.visible = true;
     hoverRegion = null;
+    lockedRegion = null;
+    listMode = false;
     reticleL.classList.add('show');
     reticleR.classList.add('show');
   }
   function closeMenu(){
     menuGroup.visible = false;
     hoverRegion = null;
+    lockedRegion = null;
     reticleL.classList.remove('show');
     reticleR.classList.remove('show');
   }
@@ -490,9 +672,32 @@
 
     if(Math.hypot(px-CLOSE_BTN.cx, py-CLOSE_BTN.cy) < CLOSE_BTN.r) return {region:'close'};
     if(Math.hypot(px-RECENTER_BTN.cx, py-RECENTER_BTN.cy) < RECENTER_BTN.r) return {region:'recenter'};
+
+    if(videoList.length > 1){
+      if(Math.hypot(px-PREV_BTN.cx, py-PREV_BTN.cy) < PREV_BTN.r) return {region:'prev'};
+      if(Math.hypot(px-NEXT_BTN.cx, py-NEXT_BTN.cy) < NEXT_BTN.r) return {region:'next'};
+      if(Math.hypot(px-LIST_BTN.cx, py-LIST_BTN.cy) < LIST_BTN.r) return {region:'list'};
+    }
+
+    if(listMode){
+      // グリッド内のどのタイルにいるかを計算
+      const relX = px - GRID.x, relY = py - GRID.y;
+      if(relX >= 0 && relY >= 0){
+        const cellW = GRID.tileW + GRID.gap, cellH = GRID.tileH + GRID.gap;
+        const col = Math.floor(relX / cellW), row = Math.floor(relY / cellH);
+        const withinTileX = relX - col*cellW, withinTileY = relY - row*cellH;
+        const cols = Math.floor((GRID.w + GRID.gap) / cellW);
+        if(withinTileX <= GRID.tileW && withinTileY <= GRID.tileH){
+          const index = row*cols + col;
+          if(index >= 0 && index < videoList.length){
+            return {region:'jump', frac: index};
+          }
+        }
+      }
+      return null; // 一覧モード中は他の操作(再生・シークなど)を無視
+    }
+
     if(Math.hypot(px-PLAY_BTN.cx, py-PLAY_BTN.cy) < PLAY_BTN.r) return {region:'play'};
-    if(Math.hypot(px-PREV_BTN.cx, py-PREV_BTN.cy) < PREV_BTN.r) return {region:'prev'};
-    if(Math.hypot(px-NEXT_BTN.cx, py-NEXT_BTN.cy) < NEXT_BTN.r) return {region:'next'};
 
     if(px>=SEEK_BAR.x && px<=SEEK_BAR.x+SEEK_BAR.w && py>=SEEK_BAR.y-30 && py<=SEEK_BAR.y+SEEK_BAR.h+30){
       return {region:'seek', frac: Math.min(1,Math.max(0,(px-SEEK_BAR.x)/SEEK_BAR.w))};
@@ -517,14 +722,21 @@
     drawCircleButton(ctx, CLOSE_BTN.cx, CLOSE_BTN.cy, CLOSE_BTN.r, hoverRegion==='close'?dwellFrac:0, '✕', 26);
     drawCircleButton(ctx, RECENTER_BTN.cx, RECENTER_BTN.cy, RECENTER_BTN.r, hoverRegion==='recenter'?dwellFrac:0, '⟲', 32);
 
-    // 動画が複数あるときだけ、前/次への切り替えボタンを表示
+    // 動画が複数あるときだけ、前/次/一覧ボタンを表示
     if(videoList.length > 1){
       drawCircleButton(ctx, PREV_BTN.cx, PREV_BTN.cy, PREV_BTN.r, hoverRegion==='prev'?dwellFrac:0, '⏮', 28);
       drawCircleButton(ctx, NEXT_BTN.cx, NEXT_BTN.cy, NEXT_BTN.r, hoverRegion==='next'?dwellFrac:0, '⏭', 28);
+      drawCircleButton(ctx, LIST_BTN.cx, LIST_BTN.cy, LIST_BTN.r, hoverRegion==='list'?dwellFrac:0, '☰', 26);
       ctx.fillStyle = 'rgba(255,255,255,0.7)';
       ctx.font = '20px -apple-system, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText((currentVideoIndex+1) + ' / ' + videoList.length, (PREV_BTN.cx+NEXT_BTN.cx)/2, PREV_BTN.cy + PREV_BTN.r + 30);
+    }
+
+    if(listMode){
+      drawVideoGrid(ctx);
+      menuTexture.needsUpdate = true;
+      return;
     }
 
     const paused = video.paused;
@@ -569,18 +781,68 @@
     menuTexture.needsUpdate = true;
   }
 
+  // メニュー内の動画一覧グリッド(視線でジャンプ選択できる)
+  function drawVideoGrid(ctx){
+    const dwellFrac = hoverRegion === 'jump' ? Math.min(1, (performance.now()-hoverStart)/DWELL_MS) : 0;
+    const cellW = GRID.tileW + GRID.gap, cellH = GRID.tileH + GRID.gap;
+    const cols = Math.floor((GRID.w + GRID.gap) / cellW);
+
+    videoList.forEach((item, i)=>{
+      const col = i % cols, row = Math.floor(i / cols);
+      const x = GRID.x + col*cellW, y = GRID.y + row*cellH;
+      if(y + GRID.tileH > GRID.y + GRID.h) return; // 画面に収まらない分は今回は表示しない
+
+      const isHover = hoverRegion === 'jump' && hoverFrac === i;
+      const isCurrent = i === currentVideoIndex;
+
+      roundRect(ctx, x, y, GRID.tileW, GRID.tileH, 10);
+      ctx.fillStyle = isCurrent ? 'rgba(95,179,163,0.18)' : 'rgba(255,255,255,0.06)';
+      ctx.fill();
+      ctx.lineWidth = isCurrent ? 3 : 2;
+      ctx.strokeStyle = isCurrent ? '#5fb3a3' : 'rgba(255,255,255,0.25)';
+      ctx.stroke();
+
+      // サムネイル画像(生成済みならImageオブジェクトをキャッシュして描画)
+      const thumbH = GRID.tileH - 30;
+      if(item.thumb){
+        let img = thumbImgCache[i];
+        if(!img){
+          img = new Image();
+          img.src = item.thumb;
+          thumbImgCache[i] = img;
+        }
+        if(img.complete && img.naturalWidth > 0){
+          ctx.save();
+          roundRect(ctx, x+4, y+4, GRID.tileW-8, thumbH, 6);
+          ctx.clip();
+          ctx.drawImage(img, x+4, y+4, GRID.tileW-8, thumbH);
+          ctx.restore();
+        }
+      }
+
+      // ファイル名
+      ctx.fillStyle = isCurrent ? '#5fb3a3' : '#e9e9ee';
+      ctx.font = '16px -apple-system, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x+6, y+thumbH+8, GRID.tileW-12, 20);
+      ctx.clip();
+      ctx.fillText(item.name, x+6, y+thumbH+22);
+      ctx.restore();
+
+      // 見つめている間のドウェル進捗(タイル下部のバー)
+      if(isHover){
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillRect(x, y+GRID.tileH-4, GRID.tileW*dwellFrac, 4);
+      }
+    });
+  }
+
   // YouTube風の、シーク先を小さくプレビュー表示する機能
+  // (事前生成しておいたサムネイルの中から一番近いものを表示するだけなので、瞬時に表示できる)
   function drawSeekPreview(ctx, hx, dur){
     const target = hoverFrac * dur;
-
-    // プレビュー動画のシークを間引く(毎フレーム呼ぶと重いため)
-    const now = performance.now();
-    if(dur && !previewSeeking && (now - lastPreviewReqAt > 150) && Math.abs(target - lastPreviewTarget) > 0.2){
-      previewSeeking = true;
-      lastPreviewReqAt = now;
-      lastPreviewTarget = target;
-      try{ previewVideo.currentTime = target; }catch(e){ previewSeeking = false; }
-    }
 
     let px = hx - PREVIEW_W/2;
     px = Math.min(Math.max(px, SEEK_BAR.x), SEEK_BAR.x + SEEK_BAR.w - PREVIEW_W);
@@ -591,14 +853,26 @@
     ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.stroke();
 
-    if(previewVideo.readyState >= 2 && previewVideo.videoWidth > 0){
-      const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
-      ctx.save();
-      roundRect(ctx, px, py, PREVIEW_W, PREVIEW_H, 8);
-      ctx.clip();
-      // SBS動画の左半分(左目用)だけを切り出して、通常の映像らしく見せる
-      ctx.drawImage(previewVideo, 0, 0, vw/2, vh, px, py, PREVIEW_W, PREVIEW_H);
-      ctx.restore();
+    if(scrubThumbs.length){
+      // 一番近い時間のサムネイルを探す(ライブでシークしないので瞬時に表示できる)
+      let nearest = scrubThumbs[0];
+      let bestDiff = Math.abs(nearest.t - target);
+      for(const s of scrubThumbs){
+        const d = Math.abs(s.t - target);
+        if(d < bestDiff){ bestDiff = d; nearest = s; }
+      }
+      if(nearest.img.complete && nearest.img.naturalWidth > 0){
+        ctx.save();
+        roundRect(ctx, px, py, PREVIEW_W, PREVIEW_H, 8);
+        ctx.clip();
+        ctx.drawImage(nearest.img, px, py, PREVIEW_W, PREVIEW_H);
+        ctx.restore();
+      }
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.font = '20px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('生成中…', px + PREVIEW_W/2, py + PREVIEW_H/2);
     }
 
     ctx.fillStyle = '#fff';
@@ -664,6 +938,17 @@
       hit = regionAt(hits[0].uv.x, hits[0].uv.y);
     }
 
+    const rawRegion = hit ? hit.region : null;
+
+    // 直前に選択した場所を、視線が一度でも離れたらロック解除する
+    if(lockedRegion !== null && rawRegion !== lockedRegion){
+      lockedRegion = null;
+    }
+    // ロック中の場所は、見つめていても選択対象として扱わない(連続選択の防止)
+    if(lockedRegion !== null && rawRegion === lockedRegion){
+      hit = null;
+    }
+
     const now = performance.now();
     if(!hit){
       if(hoverRegion){
@@ -682,13 +967,17 @@
     } else {
       missSince = null;
       if(hit.frac !== undefined){
-        if(Math.abs(hit.frac - hoverFrac) > 0.02){
+        const changed = (hoverRegion === 'jump')
+          ? (hit.frac !== hoverFrac)
+          : (Math.abs(hit.frac - hoverFrac) > 0.02);
+        if(changed){
           hoverFrac = hit.frac;
           hoverStart = now; // 大きく動いたら滞留をやり直す
         }
       }
       if(now - hoverStart >= DWELL_MS){
         triggerRegion(hoverRegion);
+        lockedRegion = hoverRegion; // 選択した場所をロック。視線が離れるまで再選択させない
         hoverStart = now + 1; // 連続発火を防ぐ小さな猶予
         hoverRegion = null;
       }
@@ -707,6 +996,16 @@
       switchVideo(-1);
     } else if(region === 'next'){
       switchVideo(1);
+    } else if(region === 'list'){
+      listMode = !listMode;
+    } else if(region === 'jump'){
+      const idx = hoverFrac;
+      if(idx >= 0 && idx < videoList.length){
+        currentVideoIndex = idx;
+        loadCurrentVideo(true);
+        listMode = false;
+        showHint('切り替え: ' + videoList[idx].name, 1500);
+      }
     } else if(region === 'seek'){
       const dur = video.duration || 0;
       if(dur) video.currentTime = hoverFrac * dur;
@@ -950,6 +1249,12 @@
 
     window.addEventListener('deviceorientation', onDeviceOrientation);
     window.addEventListener('orientationchange', onOrientationChange);
+    // 画面の回転直後はwindow.innerWidth/Heightがまだ更新されていないことがあるため、
+    // 少し待ってからresize()を呼び直し、レティクルやカメラのアスペクト比を合わせ直す
+    window.addEventListener('orientationchange', ()=>{
+      setTimeout(resize, 60);
+      setTimeout(resize, 300);
+    });
     onOrientationChange();
 
     startEl.style.display = 'none';
